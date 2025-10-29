@@ -1,0 +1,33 @@
+{
+  "name": "restate-agent-demo-kafka",
+  "version": "0.0.1",
+  "description": "Demo for Confluent Current 2025",
+  "main": "app.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc --noEmitOnError",
+    "start": "node ./dist/app.js",
+    "dev": "tsx watch ./src/app.ts",
+    "app": "npm run start",
+    "app-dev": "npm run dev",
+    "approver": "tsx ./src/tools/approver.ts",
+    "usernotify": "tsx ./src/tools/usernotify.ts",
+    "chatapp": "tsx ./src/tools/chatapp.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^2.0.23",
+    "@restatedev/restate-sdk": "^1.9.0",
+    "@restatedev/restate-sdk-zod": "^1.9.0",
+    "@restatedev/vercel-ai-middleware": "^0.2.0",
+    "@types/express": "^5.0.5",
+    "ai": "^5.0.30",
+    "express": "^5.1.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.2",
+    "esbuild": "^0.25.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.4.5"
+  }
+}
