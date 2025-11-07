@@ -13,6 +13,7 @@ Recording: https://drive.google.com/file/d/1OtyOe7e9EhkOD828UYfTyME647oAMI4T/vie
 
 # Sample invocation
 
+```bash
 curl localhost:8080/claims/process -H 'idempotency-key: abc' --json '{
   "amount": 1000,
   "description": "my iPhone was dropped and now it is broken",
@@ -24,6 +25,7 @@ curl localhost:8080/claims/process -H 'idempotency-key: abc' --json '{
     "name": "Samuel Gauthier"
   }
 }'
+```
 
 # Kafka
 
