@@ -1,14 +1,28 @@
-# Agentic Claim Processing Demo
+# Agentic Claim Processing Workflow with Restate
 
 Recording: https://drive.google.com/file/d/1OtyOe7e9EhkOD828UYfTyME647oAMI4T/view?usp=sharing
 
 
+![Claim Agent Overview](./pictures/claim_agent_overview.png)
+
+See [https://restate.dev/](https://restate.dev/) for more about Restate.
+
+
 # Services
 
-* Restate Services (agnets): `npm run dev`  -> :9080
-* Interview web ui: `npm run chatapp`  -> :3000
-* Interview requests to terminal `npm run usernotivy`
-* Human-in-the-loop approval `npm run approver`
+You need to start the following processes:
+
+* Agent Services (with the workflow code): `npm run dev` (will listen at 9080)
+
+* User interview web ui: `npm run chatapp` (will listen at 3000)
+
+* Interview requests `npm run usernotivy`. This simulates the email inbox of the user where links to the interview chat sessions get sent.
+
+* Human-in-the-loop approval `npm run approver`. This simulates the inbox of the reviewer and prints review requests to the terminal.
+
+# Connect Services
+
+You need to register the agent services at Restate. Use the webui at [localhost:9070](http://localhost:9070) and click register and put the URL `http://localhost:9080` for ther services.
 
 
 # Sample invocation
@@ -27,7 +41,7 @@ curl localhost:8080/claims/process -H 'idempotency-key: abc' --json '{
 }'
 ```
 
-# Kafka
+# Optional: Connecting Kafka
 
 (1) Start Kafka by doing `docker compose up` in the `./kafka` directory.
 
