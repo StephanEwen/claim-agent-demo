@@ -1,6 +1,6 @@
 # Agentic Claim Processing Workflow with Restate
 
-Recording: https://drive.google.com/file/d/1OtyOe7e9EhkOD828UYfTyME647oAMI4T/view?usp=sharing
+(Older recording: https://drive.google.com/file/d/1OtyOe7e9EhkOD828UYfTyME647oAMI4T/view?usp=sharing )
 
 
 ![Claim Agent Overview](./pictures/claim_agent_overview.png)
@@ -12,21 +12,20 @@ See [https://restate.dev/](https://restate.dev/) for more about Restate.
 
 You need to start the following processes:
 
-* Agent Services (with the workflow code): `npm run dev` (will listen at 9080)
+* **Agent services** (the workflow code: claim agent, interview agent, image analyzer).
+`npm run dev` runs an instance with hot reload, listening at `9080`.
 
-* User interview web ui: `npm run chatapp` (will listen at 3000)
+* **Chat UI** `npm run chatapp` (listens at `3000`) is the user's interview chat
 
-* Interview requests `npm run usernotivy`. This simulates the email inbox of the user where links to the interview chat sessions get sent.
-
-* Human-in-the-loop approval `npm run approver`. This simulates the inbox of the reviewer and prints review requests to the terminal.
+* **Reviewer UI** `npm run approver` (listens at `55443`) simulates the human reviewer's inbox.
 
 # Connect Services
 
-You need to register the agent services at Restate. Use the webui at [localhost:9070](http://localhost:9070) and click register and put the URL `http://localhost:9080` for ther services.
-
+You need to register the agent deployment(s) at Restate. Open the Restate UI at [localhost:9070](http://localhost:9070), click "Register deployment", and enter the URL `http://localhost:9080`.
 
 # Sample invocation
 
+Single image:
 ```bash
 curl localhost:8080/claims/process -H 'idempotency-key: abc' --json '{
   "amount": 1000,
@@ -41,11 +40,30 @@ curl localhost:8080/claims/process -H 'idempotency-key: abc' --json '{
 }'
 ```
 
+Three images (analyzed in parallel):
+```bash
+curl localhost:8080/claims/process -H 'idempotency-key: def' --json '{
+  "amount": 2500,
+  "description": "my car was hit by a falling tree branch during the storm, damaging the windshield and hood",
+  "images": [
+    "./pictures/windshield1.jpg",
+    "./pictures/windshield2.jpg",
+    "./pictures/windshield3.jpg"
+  ],
+  "user": {
+    "email": "sam@gmail.com",
+    "name": "Samuel Gauthier"
+  }
+}'
+```
+
 # Optional: Connecting Kafka
 
-(1) Start Kafka by doing `docker compose up` in the `./kafka` directory.
+(1) Make sure you started Restate Server with the `restate-conf.toml` config, (via `--config-file`) so it references the Kafka Cluster
 
-(2) Put events into Kafka via the console producer
+(2) Start Kafka via `docker compose up` in the `./kafka` directory.
+
+(3) Put events into Kafka via the console producer
 
 ```bash
 docker run --rm -it --net=host confluentinc/cp-kafka:7.5.0 /bin/bash

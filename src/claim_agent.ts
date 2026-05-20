@@ -1,13 +1,15 @@
 import * as restate from "@restatedev/restate-sdk";
+import { RestatePromise } from "@restatedev/restate-sdk";
 import { Context } from "@restatedev/restate-sdk";
 import { serde } from "@restatedev/restate-sdk-zod";
 
-import { generateObject, ImagePart, TextPart } from "ai";
+import { generateObject } from "ai";
 import { openai } from "@ai-sdk/openai";
 
 import { ClaimRequest, ClaimResponse, ClaimDescription, Evaluation, CompletenessCheck } from "./types";
-import { readImages, sendRequest, withAIErrorHandling } from "./utils";
-import type{ InterviewAgent } from "./interview_agent";
+import { sendRequest, withAIErrorHandling } from "./utils";
+import { imageAnalyzer } from "./image_analyzer";
+import type { InterviewAgent } from "./interview_agent";
 
 
 /**
@@ -25,36 +27,47 @@ export const claimAgent = restate.service({
         output: serde.zod(ClaimResponse)
       },
       async (ctx: restate.Context, request: ClaimRequest): Promise<ClaimResponse> => {
-        
-        // (1) Intake - extract initial claim description
+
+        // (1) Analyze all images (in parallel)
+        const imageAnalysisResults = [];
+        for (const imagePath of request.images) {
+          const analysis = ctx.serviceClient(imageAnalyzer).analyze({
+            imagePath,
+            claimDescription: request.description,
+          });
+          imageAnalysisResults.push(analysis);
+        }
+        const imageAnalyses = await RestatePromise.all(imageAnalysisResults);
+
+        // (2) Build the initial claim description from text + image analysis results
         let claimDescription: ClaimDescription = await ctx.run(
           "Build initial claim description",
-          () => intakeStep(request),
+          () => intakeStep(request.description, imageAnalyses),
           { maxRetryAttempts: 3 }
         );
 
         let humanReviewComment: string | undefined;
         const interviewSessionId = ctx.rand.uuidv4();
 
-        // (2) Iteratively ask for more input if needed
+        // (3) Iteratively ask for more input if needed
         //     and ask for human approval / evaluation
         while (true) {
 
-          // (3) Determine if the claim description is complete
+          // (4) Determine if the claim description is complete
           const { complete, requestForInfo } = await ctx.run(
             "Check completeness of claim description",
             () => completenessCheck(claimDescription, humanReviewComment),
             { maxRetryAttempts: 3 }
           );
 
-          // (4) If more input is needed, interview the user for more information
+          // (5) If more input is needed, interview the user for more information
           if (complete === "incomplete") {
             claimDescription = await ctx
                 .objectClient<InterviewAgent>({ name: "interview" }, interviewSessionId)
                 .awaitInterview({ claimDescription, requestForInfo });
           }
 
-          // (5) Ask for human approval / evaluation
+          // (6) Ask for human approval / evaluation
           const { id, promise } = ctx.awakeable<Evaluation>();
           await ctx.run("notify human reviewer", () => notifyReviewer(claimDescription, id));
 
@@ -65,7 +78,7 @@ export const claimAgent = restate.service({
           }
 
           // fall through the loop to request more information
-          humanReviewComment = comment;          
+          humanReviewComment = comment;
         }
       }
     )
@@ -73,32 +86,29 @@ export const claimAgent = restate.service({
 });
 
 
-/**
- * The intake step: Extracts initial claim description from the user's brief note
- * and attached images. Uses AI to extract the information and returns a ClaimDescription object.
- */
-async function intakeStep(request: ClaimRequest): Promise<ClaimDescription> {
+// --------------------------------------------------------
+//    Intake Step
+// --------------------------------------------------------
 
-  const images = await readImages(request.images);
+const INTAKE_SYSTEM_PROMPT =
+`You are an insurance claim *pre-intake summarizer*.
+This step is the *initial* evidence extraction before an interactive follow-up where the user will answer clarification questions.
+Your job now is to extract only clear, directly supported facts from the user's brief note and the provided image analyses.
+Do not infer or speculate. If something is missing, ambiguous, or contradictory between note and images, you must state that explicitly so it can be clarified later.
+Every field must consider all sources (note and image analyses) where applicable.
+Keep each field concise (1-3 sentences). No PII. No liability assignments.
+If unknown or unclear, write: "Unknown — needs clarification: <short reason>".
+If contradictory, write: "Contradiction — <brief description of conflict>".`;
 
-  // let images: { image: Uint8Array, mimeType: string }[] = [];
-  // try {
-  //   images = await readImages(request.images);
-  // } catch (error) {
-  //   console.error(`Error reading images: ${error}`);
-  //   images = []
-  // }
 
-  const prompt = buildIntakePrompt(request.description, images);
-
+async function intakeStep(description: string, imageAnalyses: string[]): Promise<ClaimDescription> {
   const { object: claimDescription } = await withAIErrorHandling(() =>
     generateObject({
       model: openai("gpt-5-mini"),
       schema: ClaimDescription,
-      system: INTAKE_SYSTEM_PROMPT,	
       messages: [
         { role: "system", content: INTAKE_SYSTEM_PROMPT },
-        { role: "user", content: prompt },
+        { role: "user", content: buildIntakePrompt(description, imageAnalyses) },
       ],
       maxOutputTokens: 5000,
       maxRetries: 0,
@@ -108,6 +118,53 @@ async function intakeStep(request: ClaimRequest): Promise<ClaimDescription> {
   return claimDescription;
 }
 
+
+function buildIntakePrompt(description: string, imageAnalyses: string[]): string {
+  const imagesSection = imageAnalyses.length > 0
+    ? `\n\nImage analyses (${imageAnalyses.length} image${imageAnalyses.length !== 1 ? 's' : ''}):\n` +
+      imageAnalyses.map((a, i) => `Image ${i + 1}: ${a}`).join('\n')
+    : '';
+
+  return `Produce the following fields from the user note and image analyses:
+
+* objectDescription — What the images and note clearly show about the object(s)/scene.
+* damageDescription — Only damage clearly visible in the images or unambiguously stated in the note.
+* locationOfIncident — Best supported description (street/intersection/parking lot/indoor area etc.).
+* involvedParties — Entities/vehicles/people clearly present or explicitly stated.
+
+Requirements:
+* Use only facts directly supported by the user note and/or the image analyses.
+* If a field lacks sufficient evidence, mark it as Unknown — needs clarification and state why.
+* If the note and images conflict, mark the field as Contradiction and describe the conflict briefly.
+* Keep phrasing concise and professional.
+
+User note: ${description}${imagesSection}`;
+}
+
+
+// --------------------------------------------------------
+//    Completeness Check
+// --------------------------------------------------------
+
+
+const COMPLETENESS_CHECK_SYSTEM_PROMPT = `
+You are an insurance claim clarification assistant.
+
+Goal: Review the provided ClaimDescription together with the original user description (and, if present, a brief human review comment) to determine whether the claim description is complete. If information is missing or fields contradict each other, produce a concise, user-friendly request for the minimum additional information needed to complete the claim description.
+
+Rules:
+- Only ask about fields that are missing, unclear, or contradictory.
+- If a field is marked "Unknown — needs clarification", ask a targeted question for that field.
+- If a field is marked "Contradiction — ...", briefly point out the conflict and ask one question to resolve it.
+- Group questions logically and keep them as short as possible while being specific.
+- Prefer concrete, answerable questions (who/what/when/where/how much). Avoid vague yes/no where specifics are needed.
+- No PII requests unless necessary for claim resolution; never collect sensitive data unrelated to the loss.
+- Neutral, professional tone; one compact message suitable for a chat UI.
+
+Output object:
+- complete: "complete" if no follow-up is needed; otherwise "incomplete".
+- requestForInfo: A single string for direct display in chat. If complete, return a short confirmation (e.g., "Thanks! I have everything needed for now.").
+`;
 
 async function completenessCheck(
     claim: ClaimDescription,
@@ -129,78 +186,12 @@ async function completenessCheck(
   return object;
 }
 
-
-// --------------------------------------------------------
-//    Intake Step
-// --------------------------------------------------------
-
-const INTAKE_SYSTEM_PROMPT =
-`You are an insurance claim *pre-intake summarizer*.
-This step is the *initial* evidence extraction before an interactive follow-up where the user will answer clarification questions.
-Your job now is to extract only clear, directly supported facts from the user's brief note and the attached image.
-Do not infer or speculate. If something is missing, ambiguous, or contradictory between note and image, you must state that explicitly so it can be clarified later.
-Every field must consider both sources (note and image) where applicable.
-Keep each field concise (1-3 sentences). No PII. No liability assignments.
-If unknown or unclear, write: "Unknown — needs clarification: <short reason>".
-If contradictory, write: "Contradiction — <brief description of conflict>".`;
-
-
-function buildIntakePrompt(note: string, images: { image: Uint8Array, mimeType: string }[]) {
-  
-  const userPrompt = `
-Produce the following fields from the user note and attached image:
-
-* objectDescription — What the image and note clearly show about the object(s)/scene.
-* damageDescription — Only damage clearly visible in the image or unambiguously stated in the note.
-* locationOfIncident — Best supported description (street/intersection/parking lot/indoor area etc.).
-* involvedParties — Entities/vehicles/people clearly present or explicitly stated.
-
-Requirements:
-* Use only facts directly supported by the user note and/or the image.
-* If a field lacks sufficient evidence, mark it as Unknown — needs clarification and state why.
-* If the note and image conflict, mark the field as Contradiction and describe the conflict briefly.
-* Each field should reflect consideration of BOTH inputs (note and image).
-* Keep phrasing concise and professional.
-
-User note: ${note}
-`;
-
-  return [
-      { type: "text", text: userPrompt } as TextPart,
-      ...(images.map((image) => ({ type: "image", image: image.image, mediaType: image.mimeType } as ImagePart))),
-    ]
-}
-
-// --------------------------------------------------------
-//    Completeness Check
-// --------------------------------------------------------
-
-
-const COMPLETENESS_CHECK_SYSTEM_PROMPT = `
-You are an insurance claim clarification assistant.
-
-Goal: Review the provided ClaimDescription together with the original user description (and, if present, a brief human review comment) to determine whether the claim description is complete. If information is missing or fields contradict each other, produce a concise, user-friendly request for the minimum additional information needed to complete the claim description.
-
-Rules:
-- Only ask about fields that are missing, unclear, or contradictory.
-- If a field is marked “Unknown — needs clarification”, ask a targeted question for that field.
-- If a field is marked “Contradiction — ...”, briefly point out the conflict and ask one question to resolve it.
-- Group questions logically and keep them as short as possible while being specific.
-- Prefer concrete, answerable questions (who/what/when/where/how much). Avoid vague yes/no where specifics are needed.
-- No PII requests unless necessary for claim resolution; never collect sensitive data unrelated to the loss.
-- Neutral, professional tone; one compact message suitable for a chat UI.
-
-Output object:
-- complete: "complete" if no follow-up is needed; otherwise "incomplete".
-- requestForInfo: A single string for direct display in chat. If complete, return a short confirmation (e.g., “Thanks! I have everything needed for now.”).
-`;
-
 function buildCompletenessCheckPrompt(
     claimDescription: ClaimDescription,
     humanReviewComment?: string) {
 
   const claimDescriptionJSON = JSON.stringify(claimDescription, null, 2);
-  const reviewSection = humanReviewComment 
+  const reviewSection = humanReviewComment
     ? `* Comment by human reviewer: ${humanReviewComment}`
     : "";
 

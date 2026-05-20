@@ -124,13 +124,14 @@ export const interviewAgent = restate.object({
     awaitInterview: restate.createObjectSharedHandler(
       { input: serde.zod(InterviewRequest), output: serde.zod(ClaimDescription) },
       async (ctx: restate.ObjectSharedContext<InterviewState>, interview: InterviewRequest): Promise<ClaimDescription> => {
+        
         const { id, promise } = ctx.awakeable<ClaimDescription>();
 
         // call ourselves to create the interview.
         // If that fails, the exception bubbles up and propagates to our caller as well
         await ctx.objectClient(interviewAgent, ctx.key).createInterview({ interview, onComplete: id });
 
-        await ctx.run(`ask user for input at session ${ctx.key}`, () => sendRequest("http://localhost:55442", { sessionId: ctx.key }));
+        await ctx.run(`ask user for input at session ${ctx.key}`, () => sendRequest("http://localhost:3000/sessions/notify", { sessionId: ctx.key }));
         
         // wait for the interview to complete
         return await promise;
