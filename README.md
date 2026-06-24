@@ -8,6 +8,11 @@
 See [https://restate.dev/](https://restate.dev/) for more about Restate.
 
 
+# Requirements
+
+This demo runs on **Restate 1.7** (or newer) and **Node.js 22+**.
+
+
 # Services
 
 You need to start the following processes:
@@ -59,11 +64,42 @@ curl localhost:8080/claims/process -H 'idempotency-key: def' --json '{
 
 # Optional: Connecting Kafka
 
-(1) Make sure you started Restate Server with the `restate-conf.toml` config, (via `--config-file`) so it references the Kafka Cluster
+Restate manages Kafka clusters at runtime through the Admin API / CLI.
 
-(2) Start Kafka via `docker compose up` in the `./kafka` directory.
+(1) Start Kafka via `docker compose up` in the `./kafka` directory.
 
-(3) Put events into Kafka via the console producer
+(2) Register the Kafka cluster with Restate.
+
+Using the Restate CLI:
+```bash
+restate kafka-clusters create my-cluster bootstrap.servers=localhost:9092
+```
+
+Or via the Admin API:
+```bash
+curl localhost:9070/kafka-clusters --json '{
+  "name": "my-cluster",
+  "properties": { "bootstrap.servers": "localhost:9092" }
+}'
+```
+
+(3) Create the subscription that forwards events from the `claims` topic to the `claims/process` handler.
+
+Using the Restate CLI:
+```bash
+restate subscriptions create kafka://my-cluster/claims service://claims/process auto.offset.reset=earliest
+```
+
+Or via the Admin API:
+```bash
+curl localhost:9070/subscriptions --json '{
+  "source": "kafka://my-cluster/claims",
+  "sink": "service://claims/process",
+  "options": {"auto.offset.reset": "earliest"}
+}'
+```
+
+(4) Put events into Kafka via the console producer
 
 ```bash
 docker run --rm -it --net=host confluentinc/cp-kafka:7.5.0 /bin/bash
@@ -82,14 +118,4 @@ Sample events
 Unprocessable event (without code update) because references non-existing image
 ```
 { "amount": 400, "description": "My toaster went up in flames. The toaster is broken, but I also needed to repaint some parts of the kitchen.", "images": [ "./pictures/broken_toaster.jpg" ], "user": { "email": "e@f.com", "name": "Emily Foster" } }
-```
-
-(3) Create subscription
-
-```bash
-curl localhost:9070/subscriptions --json '{
-  "source": "kafka://my-cluster/claims",
-  "sink": "service://claims/process",
-  "options": {"auto.offset.reset": "earliest"}
-}'
 ```

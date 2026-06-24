@@ -1,6 +1,5 @@
-[[ingress.kafka-clusters]]
-name = "my-cluster"
-brokers = ["PLAINTEXT://localhost:9092"]
+# Kafka clusters are registered at runtime via the Admin API / CLI
+# (see the README "Connecting Kafka" section).
 
 [http-keep-alive-options]
 interval = "30s"

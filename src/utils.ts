@@ -2,6 +2,18 @@ import { TerminalError } from "@restatedev/restate-sdk";
 import fs from "node:fs";
 import path from "node:path";
 
+/**
+ * Builds TerminalError metadata that carries the underlying cause.
+ * TerminalError metadata is a string map that Restate records with the error
+ * and propagates to the caller, so we capture the cause's type and message.
+ */
+function causeMetadata(error: unknown): Record<string, string> {
+  if (error instanceof Error) {
+    return { causeType: error.name, cause: error.message };
+  }
+  return { cause: String(error) };
+}
+
 function guessMimeType(p: string): string {
   const ext = path.extname(p).toLowerCase();
   if (ext === ".png") return "image/png";
@@ -17,7 +29,7 @@ export async function readImage(imagePath: string): Promise<{ image: Uint8Array,
     const image = await fs.promises.readFile(imagePath);
     return { image, mimeType };
   } catch (error) {
-    throw new TerminalError(`Failed to read image: ${imagePath}`);
+    throw new TerminalError(`Failed to read image: ${imagePath}`, { metadata: causeMetadata(error) });
   }
 }
 
@@ -42,7 +54,7 @@ export async function withAIErrorHandling<T>(fn: () => Promise<T>): Promise<T> {
         `AI model exceeded token limit. ` +
         `Output tokens used: ${outputTokens} (including ${reasoningTokens} reasoning tokens). ` +
         `For reasoning models, consider increasing maxOutputTokens or using a non-reasoning model.`,
-        { cause: error }
+        { metadata: causeMetadata(error) }
       );
     }
     
@@ -52,7 +64,7 @@ export async function withAIErrorHandling<T>(fn: () => Promise<T>): Promise<T> {
         `AI model failed to generate structured output. ` +
         `Reason: ${error.finishReason || 'unknown'}. ` +
         `This may indicate the model refused the request or encountered a content filter.`,
-        { cause: error }
+        { metadata: causeMetadata(error) }
       );
     }
     
@@ -73,7 +85,7 @@ export async function sendRequest(url: string, payload: any) {
   try {
     body = JSON.stringify(payload);
   } catch (error) {
-    throw new TerminalError(`Failed to stringify payload: ${error}`, { cause: error });
+    throw new TerminalError(`Failed to stringify payload: ${error}`, { metadata: causeMetadata(error) });
   }
 
   const response = await fetch(url, {
